@@ -2,8 +2,8 @@ menu "Milestones Assistant"
 
 config OTA_URL
     string "Default OTA URL"
-    # default "https://api.tenclass.net/xiaozhi/ota/"
-    default "http://192.168.1.97:18989/milestones/ota/"
+    # default "http://192.168.1.97:18989/milestones/ota/"
+    default "https://quoctho228.tail0389ec.ts.net/milestones/ota/"
     help
         The application will access this URL to check for new firmwares and server address.
 
