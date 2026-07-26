@@ -385,6 +385,7 @@ void OledDisplay::SetupUI_128x32() {
 }
 
 void OledDisplay::SetEmotion(const char* emotion) {
+    ESP_LOGI(TAG, "SetEmotion called with: '%s'", emotion ? emotion : "NULL");  // Log the emotion value for debugging
     const char* utf8 = font_awesome_get_utf8(emotion);
     DisplayLockGuard lock(this);
     if (emotion_label_ == nullptr) {
