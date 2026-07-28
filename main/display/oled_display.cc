@@ -96,6 +96,20 @@ void OledDisplay::SetupUI() {
 }
 
 OledDisplay::~OledDisplay() {
+    if (emotion_gif_ != nullptr) {
+        delete emotion_gif_;
+        emotion_gif_ = nullptr;
+    }
+    if (emotion_image_ != nullptr) {
+        lv_obj_del(emotion_image_);
+        emotion_image_ = nullptr;
+    }
+    if (subtitle_bg_ != nullptr) {
+        subtitle_label_ = nullptr;
+        lv_obj_del(subtitle_bg_);
+        subtitle_bg_ = nullptr;
+    }
+
     if (content_ != nullptr) {
         lv_obj_del(content_);
     }
@@ -145,13 +159,25 @@ void OledDisplay::Unlock() {
 
 void OledDisplay::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
+
+    // Replace all newlines with spaces
+    std::string content_str = content ? content : "";
+    std::replace(content_str.begin(), content_str.end(), '\n', ' ');
+
+    // Khi đang ở chế độ full-screen emotion, phụ đề hiển thị dạng overlay
+    // đè lên ảnh/GIF thay vì dùng chat_message_label_ trong container_ cũ.
+    if (emotion_fullscreen_ && subtitle_label_ != nullptr && subtitle_bg_ != nullptr) {
+        if (content_str.empty()) {
+            lv_obj_add_flag(subtitle_bg_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_label_set_text(subtitle_label_, content_str.c_str());
+            lv_obj_remove_flag(subtitle_bg_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
     if (chat_message_label_ == nullptr) {
         return;
     }
-
-    // Replace all newlines with spaces
-    std::string content_str = content;
-    std::replace(content_str.begin(), content_str.end(), '\n', ' ');
 
     if (content_right_ == nullptr) {
         lv_label_set_text(chat_message_label_, content_str.c_str());
@@ -295,6 +321,45 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_set_style_text_color(low_battery_label_, lv_color_white(), 0);
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
+
+    /* --- Layer emotion image/GIF (Assets/EmojiCollection) --- */
+    /* Con trực tiếp của screen, chiếm phần dưới màn hình (y=16..64), CHỪA lại 16px trên cùng
+       cố định cho top_bar_/status_bar_ (wifi, pin, trạng thái) luôn hiển thị, kể cả khi đang
+       ở chế độ emotion full-screen. */
+    emotion_image_ = lv_image_create(screen);
+    lv_obj_set_size(emotion_image_, LV_HOR_RES, LV_VER_RES - 16);
+    lv_obj_set_pos(emotion_image_, 0, 16);
+    lv_obj_set_style_bg_color(emotion_image_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(emotion_image_, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(emotion_image_, 0, 0);
+    lv_obj_set_style_pad_all(emotion_image_, 0, 0);
+    lv_obj_set_style_radius(emotion_image_, 0, 0);
+    lv_obj_add_flag(emotion_image_, LV_OBJ_FLAG_HIDDEN);
+
+    subtitle_bg_ = lv_obj_create(screen);
+    lv_obj_set_size(subtitle_bg_, LV_HOR_RES, 16);
+    lv_obj_align(subtitle_bg_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(subtitle_bg_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(subtitle_bg_, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(subtitle_bg_, 0, 0);
+    lv_obj_set_style_radius(subtitle_bg_, 0, 0);
+    lv_obj_set_style_pad_all(subtitle_bg_, 0, 0);
+    lv_obj_add_flag(subtitle_bg_, LV_OBJ_FLAG_HIDDEN);
+
+    subtitle_label_ = lv_label_create(subtitle_bg_);
+    lv_obj_set_width(subtitle_label_, LV_HOR_RES);
+    lv_label_set_long_mode(subtitle_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_text_align(subtitle_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(subtitle_label_, lv_color_white(), 0);
+    lv_label_set_text(subtitle_label_, "");
+    lv_obj_center(subtitle_label_);
+
+    static lv_anim_t sub_a;
+    lv_anim_init(&sub_a);
+    lv_anim_set_delay(&sub_a, 1000);
+    lv_anim_set_repeat_count(&sub_a, LV_ANIM_REPEAT_INFINITE);
+    lv_obj_set_style_anim(subtitle_label_, &sub_a, LV_PART_MAIN);
+    lv_obj_set_style_anim_duration(subtitle_label_, lv_anim_speed_clamped(60, 300, 60000), LV_PART_MAIN);
 }
 
 void OledDisplay::SetupUI_128x32() {
@@ -382,15 +447,101 @@ void OledDisplay::SetupUI_128x32() {
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
     lv_obj_set_style_anim(chat_message_label_, &a, LV_PART_MAIN);
     lv_obj_set_style_anim_duration(chat_message_label_, lv_anim_speed_clamped(60, 300, 60000), LV_PART_MAIN);
+
+    // Lưu ý: chế độ full-screen emotion (emotion_image_/subtitle_bg_) hiện CHỈ được tạo
+    // trong SetupUI_128x64(). Board dùng layout 128x32 sẽ luôn fallback về Font Awesome
+    // tĩnh (emotion_label_) vì emotion_image_ == nullptr ở SetEmotion().
+}
+
+void OledDisplay::ShowEmotionFullscreen(bool show) {
+    if (emotion_fullscreen_ == show) {
+        return;
+    }
+    emotion_fullscreen_ = show;
+
+    // top_bar_ (wifi/pin/mute) và status_bar_ (trạng thái nghe/nói) LUÔN được giữ hiển thị,
+    // kể cả khi đang ở chế độ emotion — chỉ ẩn/hiện content_ (icon Font Awesome / chat cũ),
+    // vì emotion_image_ đã được đặt ở y=16..64, không đè lên vùng 16px trên cùng.
+    if (show) {
+        if (content_ != nullptr) {
+            lv_obj_add_flag(content_, LV_OBJ_FLAG_HIDDEN);
+        }
+        // container_ có kích thước cố định 128x64; co chiều cao lại còn đúng 16px (chỉ chứa
+        // top_bar_) để nền của nó (nếu có) không đè lên emotion_image_ ở phía dưới.
+        if (container_ != nullptr) {
+            lv_obj_set_height(container_, 16);
+        }
+        lv_obj_remove_flag(emotion_image_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(subtitle_bg_);
+    } else {
+        if (emotion_gif_ != nullptr) {
+            delete emotion_gif_;
+            emotion_gif_ = nullptr;
+        }
+        lv_obj_add_flag(emotion_image_, LV_OBJ_FLAG_HIDDEN);
+        if (subtitle_bg_ != nullptr) {
+            lv_obj_add_flag(subtitle_bg_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (container_ != nullptr) {
+            lv_obj_set_height(container_, LV_VER_RES);
+        }
+        if (content_ != nullptr) {
+            lv_obj_remove_flag(content_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 void OledDisplay::SetEmotion(const char* emotion) {
     ESP_LOGI(TAG, "SetEmotion called with: '%s'", emotion ? emotion : "NULL");  // Log the emotion value for debugging
-    const char* utf8 = font_awesome_get_utf8(emotion);
     DisplayLockGuard lock(this);
     if (emotion_label_ == nullptr) {
         return;
     }
+
+    // emotion_image_ chỉ tồn tại trên layout 128x64 (xem SetupUI_128x64()).
+    // Nếu null (board dùng SetupUI_128x32), luôn fallback về Font Awesome tĩnh.
+    const LvglImage* image = nullptr;
+    if (emotion_image_ != nullptr) {
+        auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+        auto emoji_collection = lvgl_theme ? lvgl_theme->emoji_collection() : nullptr;
+        if (emoji_collection != nullptr) {
+            image = emoji_collection->GetEmojiImage(emotion);
+        }
+    }
+
+    if (image != nullptr) {
+        ShowEmotionFullscreen(true);
+
+        if (emotion_gif_ != nullptr) {
+            delete emotion_gif_;
+            emotion_gif_ = nullptr;
+        }
+
+        if (image->IsGif()) {
+            emotion_gif_ = new LvglGif(image->image_dsc());
+            if (emotion_gif_->IsLoaded()) {
+                lv_image_set_src(emotion_image_, emotion_gif_->image_dsc());
+                auto img = emotion_image_;
+                emotion_gif_->SetFrameCallback([img]() {
+                    lv_obj_invalidate(img);
+                });
+                emotion_gif_->Start();
+            } else {
+                ESP_LOGW(TAG, "Failed to load GIF for emotion '%s', showing static frame", emotion);
+                delete emotion_gif_;
+                emotion_gif_ = nullptr;
+                lv_image_set_src(emotion_image_, image->image_dsc());
+            }
+        } else {
+            lv_image_set_src(emotion_image_, image->image_dsc());
+        }
+        return;
+    }
+
+    // Fallback: emotion không có trong EmojiCollection (hoặc chưa nạp assets.bin,
+    // hoặc board dùng layout 128x32) -> dùng Font Awesome tĩnh như trước đây.
+    ShowEmotionFullscreen(false);
+    const char* utf8 = font_awesome_get_utf8(emotion);
     if (utf8 != nullptr) {
         lv_label_set_text(emotion_label_, utf8);
     } else {
